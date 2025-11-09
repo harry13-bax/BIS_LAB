@@ -1,0 +1,124 @@
+import numpy as np
+
+# --- 1. Problem Configuration (Smaller Scale) ---
+NUM_NURSES = 5
+NUM_DAYS = 4
+NUM_SHIFTS = 4  # 0: Off, 1: Day, 2: Evening, 3: Night
+SHIFTS_MAP = {0: "Off", 1: "Day", 2: "Eve", 3: "Ngt"}
+
+# --- Constraint Definitions (Adjusted for smaller scale) ---
+# Hard Constraint: Minimum nurses required for Day, Eve, Night shifts
+# Now requires 1 nurse for each shift, which is achievable with 5 nurses.
+MIN_STAFFING_LEVELS = [1, 1, 1] 
+
+# Soft Constraint: Nurse preferences (penalty for assigning a shift)
+NURSE_PREFERENCES = np.zeros((NUM_NURSES, NUM_SHIFTS))
+NURSE_PREFERENCES[0, 3] = 20  # Nurse 0 dislikes Night Shift
+NURSE_PREFERENCES[1, 3] = 20  # Nurse 1 dislikes Night Shift
+
+# --- 2. Fitness Calculation ---
+def calculate_fitness(schedule):
+    """Calculates the penalty score for a given schedule."""
+    total_penalty = 0
+    
+    # --- HARD CONSTRAINTS (High Penalties) ---
+    
+    # H1: Minimum Staffing Levels
+    for day in range(NUM_DAYS):
+        for shift_idx in range(1, NUM_SHIFTS): # Skip 'Off' shift
+            nurses_on_shift = np.sum(schedule[:, day] == shift_idx)
+            required_nurses = MIN_STAFFING_LEVELS[shift_idx - 1]
+            if nurses_on_shift < required_nurses:
+                total_penalty += 1000 * (required_nurses - nurses_on_shift)
+
+    # H2: A nurse works at most 3 days in this 4-day period
+    for nurse in range(NUM_NURSES):
+        work_days = np.sum(schedule[nurse, :] > 0)
+        if work_days > 3:
+            total_penalty += 500 * (work_days - 3)
+
+    # --- SOFT CONSTRAINTS (Lower Penalties) ---
+    
+    # S1: Nurse Preferences
+    for nurse in range(NUM_NURSES):
+        for day in range(NUM_DAYS):
+            assigned_shift = int(schedule[nurse, day])
+            if assigned_shift > 0: # If not off
+                total_penalty += NURSE_PREFERENCES[nurse, assigned_shift]
+                
+    return total_penalty
+
+# --- 3. GWO Algorithm for NSP ---
+def gwo_for_nsp(population_size, max_iter):
+    """The core GWO algorithm, unchanged."""
+    positions = np.random.randint(0, NUM_SHIFTS, size=(population_size, NUM_NURSES, NUM_DAYS))
+
+    alpha_pos = np.zeros((NUM_NURSES, NUM_DAYS))
+    alpha_score = float('inf')
+    beta_pos = np.zeros((NUM_NURSES, NUM_DAYS))
+    beta_score = float('inf')
+    delta_pos = np.zeros((NUM_NURSES, NUM_DAYS))
+    delta_score = float('inf')
+
+    print(f"GWO for NSP started... Population Size: {population_size}, Max Iterations: {max_iter}")
+
+    for t in range(max_iter):
+        for i in range(population_size):
+            fitness = calculate_fitness(positions[i])
+            
+            if fitness < alpha_score:
+                alpha_score, alpha_pos = fitness, positions[i].copy()
+            elif alpha_score < fitness < beta_score:
+                beta_score, beta_pos = fitness, positions[i].copy()
+            elif beta_score < fitness < delta_score:
+                delta_score, delta_pos = fitness, positions[i].copy()
+
+        a = 2 - t * (2 / max_iter)
+
+        for i in range(population_size):
+            r1, r2 = np.random.rand(NUM_NURSES, NUM_DAYS), np.random.rand(NUM_NURSES, NUM_DAYS)
+            A1, C1 = 2 * a * r1 - a, 2 * r2
+            D_alpha = np.abs(C1 * alpha_pos - positions[i])
+            X1 = alpha_pos - A1 * D_alpha
+            
+            r1, r2 = np.random.rand(NUM_NURSES, NUM_DAYS), np.random.rand(NUM_NURSES, NUM_DAYS)
+            A2, C2 = 2 * a * r1 - a, 2 * r2
+            D_beta = np.abs(C2 * beta_pos - positions[i])
+            X2 = beta_pos - A2 * D_beta
+            
+            r1, r2 = np.random.rand(NUM_NURSES, NUM_DAYS), np.random.rand(NUM_NURSES, NUM_DAYS)
+            A3, C3 = 2 * a * r1 - a, 2 * r2
+            D_delta = np.abs(C3 * delta_pos - positions[i])
+            X3 = delta_pos - A3 * D_delta
+            
+            positions[i] = (X1 + X2 + X3) / 3
+            
+            positions[i] = np.rint(positions[i]).astype(int)
+            positions[i] = np.clip(positions[i], 0, NUM_SHIFTS - 1)
+
+        if (t + 1) % 20 == 0:
+            print(f"Iteration {t + 1}/{max_iter}, Best Schedule Penalty: {alpha_score}")
+
+    return alpha_pos, alpha_score
+
+# --- 4. Main Execution ---
+if __name__ == '__main__':
+    # GWO Parameters
+    POP_SIZE = 40
+    MAX_ITER = 150
+
+    best_schedule, best_penalty = gwo_for_nsp(POP_SIZE, MAX_ITER)
+
+    print("\n--- Optimization Finished ---")
+    print(f"Lowest Penalty Score Found: {best_penalty}")
+    print("Best Schedule Found:")
+    
+    header = "Nurse |" + "".join([f" Day {i+1} |" for i in range(NUM_DAYS)])
+    print(header)
+    print("-" * len(header))
+    for nurse_idx in range(NUM_NURSES):
+        row_str = f" {nurse_idx:<4} |"
+        for day_idx in range(NUM_DAYS):
+            shift_code = int(best_schedule[nurse_idx, day_idx])
+            row_str += f" {SHIFTS_MAP[shift_code]:^5} |"
+        print(row_str)
